@@ -9,16 +9,16 @@
 # 不提交是为了避免每次增删 Swift 文件都在 project.pbxproj 里产生几百行 diff ——
 # 那种 diff 没法 review，还特别容易冲突。
 # 代价：clone 之后必须先在仓库根目录跑一次 `xcodegen generate`。
-Scrcpy.xcodeproj/
-Scrcpy/Info.plist
-Scrcpy/Scrcpy.entitlements
+ScrcpyMac.xcodeproj/
+ScrcpyMac/ScrcpyMac-Info.plist
+ScrcpyMac/ScrcpyMac.entitlements
 
 # ---- 引擎（重要：别提交）------------------------------------------------------
 # scrcpy 以 GPLv3 授权。本项目**不重分发**它的二进制：仓库里一份都不放，
 # 构建时用 scripts/fetch-engine.sh 现取，或者让 App 首次运行时自己从官方
 # releases 下载。详见 NOTICE。
 #
-# 开头的斜杠不能省：写成 `engine/` 会连带匹配到源码目录 `Scrcpy/Engine/`，
+# 开头的斜杠不能省：写成 `engine/` 会连带匹配到源码目录 `ScrcpyMac/Engine/`，
 # 把 EngineStore.swift 静默排除在仓库外。
 /engine/
 

@@ -38,7 +38,9 @@ struct MainView: View {
             actionBar
         }
         .frame(minWidth: 560, minHeight: 660)
-        .background(Theme.Palette.settingsContent)
+        // ignoresSafeArea 是必须的：窗口用了 .fullSizeContentView，内容铺到标题栏底下，
+        // 不忽略安全区的话标题栏那一条不会被这个背景盖住，会露出一段系统灰。
+        .background(Theme.Palette.settingsContent.ignoresSafeArea())
         .appTheme()
         .onAppear {
             model.startDevicePolling()
@@ -51,7 +53,7 @@ struct MainView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("Scrcpy")
+            Text("ScrcpyMac")
                 .font(.system(size: Theme.FontSize.settingsTitle, weight: Theme.Weight.medium))
             Spacer()
             Text(versionLine)
@@ -179,6 +181,14 @@ struct MainView: View {
         case .installed(let version):
             HStack(spacing: 8) {
                 Text("已更新到 \(version)")
+                    .font(.system(size: Theme.FontSize.small))
+                    .foregroundStyle(Theme.Palette.success)
+                ActionButton(title: "好", style: .quiet, height: 26) { model.dismissUpdateState() }
+            }
+
+        case .engineReady(let version):
+            HStack(spacing: 8) {
+                Text("引擎已就绪 · scrcpy \(version)")
                     .font(.system(size: Theme.FontSize.small))
                     .foregroundStyle(Theme.Palette.success)
                 ActionButton(title: "好", style: .quiet, height: 26) { model.dismissUpdateState() }

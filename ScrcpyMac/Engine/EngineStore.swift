@@ -49,7 +49,7 @@ final class EngineStore: @unchecked Sendable {
 
     static let shared = EngineStore()
 
-    /// `~/Library/Application Support/Scrcpy`
+    /// `~/Library/Application Support/ScrcpyMac`
     let supportDir: URL
     /// `supportDir/engine`
     let engineDir: URL
@@ -69,7 +69,7 @@ final class EngineStore: @unchecked Sendable {
         let base = supportDir
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        self.supportDir = base.appendingPathComponent("Scrcpy", isDirectory: true)
+        self.supportDir = base.appendingPathComponent("ScrcpyMac", isDirectory: true)
         self.engineDir = self.supportDir.appendingPathComponent("engine", isDirectory: true)
     }
 
@@ -241,6 +241,106 @@ final class EngineStore: @unchecked Sendable {
         let path = (raw as NSString).expandingTildeInPath
         guard FileManager.default.isExecutableFile(atPath: path) else { return adbURL }
         return URL(fileURLWithPath: path)
+    }
+
+    // MARK: - 投屏窗口的宿主 bundle
+
+    /// 装着 scrcpy 的迷你 .app。
+    ///
+    /// 子进程必须待在一个带 `LSUIElement` 的 bundle 里，才拿得到 accessory
+    /// （`UIElement`）激活策略：没有程序坞图标、不占菜单栏，但窗口照常能激活、
+    /// 能收键盘和鼠标。进程的默认策略取决于它是不是待在一个 bundle 里：
+    /// 裸二进制跑出来是 prohibited —— 一样没有图标，可窗口也起不来了（拉不起渲染），
+    /// 所以「把引擎直接 exec 掉」这条捷径是走不通的。
+    ///
+    /// 放在 Application Support 而不是 App bundle 里，是因为它必须可写，
+    /// 而且随时会被重建 —— 见 `prepareMirrorApp`。
+    var mirrorAppURL: URL { supportDir.appendingPathComponent("Mirror.app", isDirectory: true) }
+    var mirrorExecutableURL: URL { mirrorAppURL.appendingPathComponent("Contents/MacOS/scrcpy") }
+    /// 子进程真正的可执行文件所在目录。
+    ///
+    /// 孤儿回收要拿它一起比对 —— 起了这个 bundle 之后，子进程的可执行路径
+    /// 已经不在引擎目录底下了，只按引擎目录比会永远回收不掉残留进程。
+    var mirrorExeDir: URL { mirrorExecutableURL.deletingLastPathComponent() }
+
+    /// 把 `info` 那份引擎的 scrcpy 放进迷你 .app，返回它的可执行文件路径。
+    ///
+    /// 每次启动都调，但只有内容对不上时才真的落盘：引擎更新换的是整个目录
+    /// （新的 inode），这里跟着重新链一次就行。
+    func prepareMirrorApp(for info: EngineInfo) throws -> URL {
+        let fm = FileManager.default
+        let source = info.dir.appendingPathComponent("scrcpy")
+        let dest = mirrorExecutableURL
+
+        do {
+            try fm.createDirectory(at: mirrorExeDir, withIntermediateDirectories: true)
+        } catch {
+            throw EngineError.installFailed("无法创建 \(mirrorExeDir.path)：\(error.localizedDescription)")
+        }
+
+        try writeMirrorInfoPlist()
+
+        if !isUpToDate(dest, against: source) {
+            // 先硬链接：引擎和支持目录通常在一个卷上，这样不用白占 10MB。
+            // 跨卷（App 装在别的盘上）才退化成拷贝。
+            try? fm.removeItem(at: dest)
+            if link(source.path, dest.path) != 0 {
+                do {
+                    try fm.copyItem(at: source, to: dest)
+                    // 拷贝出来的 mtime 是「现在」，下次比对上会永远不相等，
+                    // 于是每次启动都重拷一份。对齐成源文件的，让两种情况共用同一套判断。
+                    if let mtime = try? source.resourceValues(forKeys: [.contentModificationDateKey])
+                        .contentModificationDate {
+                        try? fm.setAttributes([.modificationDate: mtime], ofItemAtPath: dest.path)
+                    }
+                } catch {
+                    throw EngineError.installFailed("无法把 scrcpy 放进 \(dest.path)：\(error.localizedDescription)")
+                }
+            }
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+        }
+
+        return dest
+    }
+
+    private func writeMirrorInfoPlist() throws {
+        let contents = mirrorAppURL.appendingPathComponent("Contents", isDirectory: true)
+        let plist = contents.appendingPathComponent("Info.plist")
+        // 每次覆盖写一份，成本可以忽略，也省掉「改了内容却没生效」这类问题。
+        let body: [String: Any] = [
+            "CFBundleExecutable": "scrcpy",
+            "CFBundleIdentifier": "com.vincerise.scrcpymac.mirror",
+            "CFBundleName": "ScrcpyMac",
+            "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": "1.0",
+            // 这一个键就是整件事的关键：它让 AppKit 把进程的默认激活策略
+            // 定成 accessory，而不是普通应用的 regular。
+            "LSUIElement": true,
+        ]
+        do {
+            let data = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
+            try data.write(to: plist, options: .atomic)
+        } catch {
+            throw EngineError.installFailed("无法写入 \(plist.path)：\(error.localizedDescription)")
+        }
+    }
+
+    /// `dest` 是不是已经就是 `source` 那一份。
+    ///
+    /// 硬链接时两者的 fileResourceIdentifier（dev + inode）相同；退化到拷贝时，
+    /// 拿大小和修改时间比 —— 后者已经在上面的拷贝分支里对齐过了。
+    private func isUpToDate(_ dest: URL, against source: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .fileResourceIdentifierKey]
+        guard let d = try? dest.resourceValues(forKeys: keys),
+              let s = try? source.resourceValues(forKeys: keys) else { return false }
+
+        if let di = d.fileResourceIdentifier, let si = s.fileResourceIdentifier,
+           (di as AnyObject).isEqual(si) {
+            return true
+        }
+        guard let ds = d.fileSize, let ss = s.fileSize, ds == ss,
+              let dm = d.contentModificationDate, let sm = s.contentModificationDate else { return false }
+        return abs(dm.timeIntervalSince(sm)) < 1
     }
 
     // MARK: - 版本

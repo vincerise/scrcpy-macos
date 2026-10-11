@@ -17,11 +17,11 @@ if [[ ! -d "$ROOT/engine" ]]; then
   echo "note: 未找到 engine/，本次构建不带引擎种子（App 首次启动将联网下载）"
 fi
 
-xcodebuild -project Scrcpy.xcodeproj -scheme Scrcpy -configuration "$CONFIG" \
+xcodebuild -project ScrcpyMac.xcodeproj -scheme ScrcpyMac -configuration "$CONFIG" \
   -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build \
   | grep -E "error:|warning:|note: |\*\* BUILD" || true
 
-APP="$ROOT/build/Build/Products/$CONFIG/Scrcpy.app"
+APP="$ROOT/build/Build/Products/$CONFIG/ScrcpyMac.app"
 [[ -d "$APP" ]] || { echo "构建失败，未找到 $APP" >&2; exit 1; }
 
 # ---- 验证 -------------------------------------------------------------------
@@ -40,7 +40,7 @@ else
 fi
 
 echo "==> 通用二进制检查"
-lipo -archs "$APP/Contents/MacOS/Scrcpy" | sed 's/^/    Scrcpy: /'
+lipo -archs "$APP/Contents/MacOS/ScrcpyMac" | sed 's/^/    ScrcpyMac: /'
 
 echo
 echo "构建完成：$APP"

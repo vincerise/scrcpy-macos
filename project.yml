@@ -1,4 +1,4 @@
-name: Scrcpy
+name: ScrcpyMac
 options:
   bundleIdPrefix: com.vincerise
   deploymentTarget:
@@ -31,33 +31,36 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 schemes:
-  Scrcpy:
+  ScrcpyMac:
     build:
       targets:
-        Scrcpy: all
+        ScrcpyMac: all
     run:
       config: Debug
     archive:
       config: Release
 
 targets:
-  Scrcpy:
+  ScrcpyMac:
     type: application
     platform: macOS
     sources:
-      - path: Scrcpy
+      - path: ScrcpyMac
     entitlements:
-      path: Scrcpy/Scrcpy.entitlements
+      path: ScrcpyMac/ScrcpyMac.entitlements
       properties:
         # 明确关闭沙盒。沙盒会禁止 Process 执行沙盒外的任意二进制
         # （也就是我们的 scrcpy/adb 引擎），整个方案直接失效。
         com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
     info:
-      path: Scrcpy/Info.plist
+      path: ScrcpyMac/ScrcpyMac-Info.plist
       properties:
-        CFBundleName: Scrcpy
-        CFBundleDisplayName: Scrcpy
+        # 名字刻意**不叫 Scrcpy**：与上游完全同名会看起来像官方应用，
+        # 也是万一上游注册商标时最容易被认定的情形。保留 scrcpy 作为名字的
+        # 组成部分（同 QtScrcpy / escrcpy 的做法）既能被搜到，又不至于混淆。
+        CFBundleName: ScrcpyMac
+        CFBundleDisplayName: ScrcpyMac
         # 图标由 Assets.xcassets/AppIcon 编译成 AppIcon.icns。
         # 手写 Info.plist（GENERATE_INFOPLIST_FILE=NO）时两个键都写上更稳：
         # CFBundleIconFile 给 Finder/Dock，CFBundleIconName 给新版资产目录查找。
@@ -73,14 +76,14 @@ targets:
         # 所以这条文案出现在弹窗里。不写的话弹窗说明是空白的，
         # 用户很容易误点「不允许」—— 而一旦拒绝就不会再弹第二次。
         NSLocalNetworkUsageDescription: 用于通过 Wi-Fi 连接 Android 设备（adb connect）进行投屏。USB 连接不需要此权限。
-        NSHumanReadableCopyright: Scrcpy 引擎版权归 rom1v 所有（GPLv3），本项目为非官方封装。
+        NSHumanReadableCopyright: 投屏引擎 scrcpy 版权归 rom1v 所有（GPLv3），本项目为非官方封装。
         # 刻意不写 LSUIElement / LSBackgroundOnly：写了就不进启动台、没有程序坞图标。
         # 刻意不写 NSSupportsSuddenTermination：我们是子进程的 supervisor，
         # 退出时必须发 SIGTERM 让 scrcpy 清理设备上的 scrcpy-server，不能被系统直接杀。
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vincerise.scrcpy
-        PRODUCT_NAME: Scrcpy
+        PRODUCT_BUNDLE_IDENTIFIER: com.vincerise.scrcpymac
+        PRODUCT_NAME: ScrcpyMac
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # 让**系统控件**也认这个强调色。SwiftUI 的 `.tint()` 管不到 macOS 的

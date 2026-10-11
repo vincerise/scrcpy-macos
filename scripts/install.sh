@@ -5,18 +5,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${1:-Release}"
-SRC="$ROOT/build/Build/Products/$CONFIG/Scrcpy.app"
+SRC="$ROOT/build/Build/Products/$CONFIG/ScrcpyMac.app"
 DEST_DIR="${DEST_DIR:-/Applications}"
-DEST="$DEST_DIR/Scrcpy.app"
+DEST="$DEST_DIR/ScrcpyMac.app"
 
 [[ -d "$SRC" ]] || { echo "没找到 $SRC，先跑 scripts/build.sh" >&2; exit 1; }
 
 # 正在跑就先退掉：替换一个正在运行的 bundle，行为未定义。
-if pgrep -f "$DEST/Contents/MacOS/Scrcpy" >/dev/null 2>&1; then
-  echo "==> 先退出正在运行的 Scrcpy"
-  osascript -e 'tell application "Scrcpy" to quit' 2>/dev/null || true
+if pgrep -f "$DEST/Contents/MacOS/ScrcpyMac" >/dev/null 2>&1; then
+  echo "==> 先退出正在运行的 ScrcpyMac"
+  osascript -e 'tell application "ScrcpyMac" to quit' 2>/dev/null || true
   sleep 1
-  pkill -f "$DEST/Contents/MacOS/Scrcpy" 2>/dev/null || true
+  pkill -f "$DEST/Contents/MacOS/ScrcpyMac" 2>/dev/null || true
 fi
 
 echo "==> 安装到 $DEST"
@@ -33,4 +33,4 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 killall Dock 2>/dev/null || true
 
 echo
-echo "完成。现在可以在启动台里找到 Scrcpy，也可以拖进程序坞。"
+echo "完成。现在可以在启动台里找到 ScrcpyMac，也可以拖进程序坞。"

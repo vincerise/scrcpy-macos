@@ -145,6 +145,9 @@ enum Theme {
         static let consoleHeight: CGFloat = 190
         /// 状态圆点直径。
         static let dot: CGFloat = 7
+        /// 设备列表里选中行左侧那道竖条的宽度。
+        /// 比 1pt 的卡片描边粗一点才看得出来，又不到 3pt —— 那已经像进度条了。
+        static let selectionBarWidth: CGFloat = 2
     }
 }
 

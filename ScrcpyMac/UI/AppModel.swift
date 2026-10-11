@@ -52,7 +52,11 @@ final class AppModel: ObservableObject {
         case upToDate(String)
         case available(String)
         case downloading(Double)
+        /// 用户手动更新完成。
         case installed(String)
+        /// 首次运行自动装好。与 `installed` 分开是因为文案不一样 ——
+        /// 什么都没更新过却说「已更新到 x.y.z」会让人以为哪里出了错。
+        case engineReady(String)
         case failed(String)
     }
 
@@ -148,27 +152,64 @@ final class AppModel: ObservableObject {
             // 不清理的话接下来这次连接会直接失败，而用户看到的只是一个莫名其妙的报错。
             ScrcpySession.reapOrphans(
                 supportDir: store.supportDir,
-                engineRoots: [store.engineDir] + [store.seedDir].compactMap { $0 }
+                engineRoots: [store.engineDir, store.mirrorExeDir] + [store.seedDir].compactMap { $0 }
             )
 
             // `current()` 会跑一次 `scrcpy --version` 冒烟，属于阻塞调用。
             if let existing = store.current() {
-                DispatchQueue.main.async { self.acceptEngine(existing, note: nil) }
+                DispatchQueue.main.async {
+                    self.acceptEngine(existing, note: nil)
+                    // 有引擎了才值得顺手看一眼有没有新版 —— 而且只在发现新版时才出声。
+                    self.checkForUpdates(silent: true)
+                }
                 return
             }
             do {
                 let bootstrapped = try store.bootstrap()
                 DispatchQueue.main.async {
                     self.acceptEngine(bootstrapped, note: "[引擎就绪] scrcpy \(bootstrapped.version)（内置种子）\n")
+                    self.checkForUpdates(silent: true)
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.isPreparingEngine = false
-                    self.engineMessage = "本机还没有 scrcpy 引擎，点上面的「检查更新」联网获取一份。"
-                    self.appendLog("[引擎缺失] \(error.localizedDescription)\n")
+                // 走到这里说明本机**一个能用的引擎都没有**：既没有种子，也没有装过的。
+                // 这时候不能只提示一句让用户自己点 —— 没有引擎的 App 什么都做不了，
+                // 提示等于把「让它能用」这件事推给用户。直接自己下一份。
+                DispatchQueue.main.async { self.autoInstallEngine() }
+            }
+        }
+    }
+
+    /// 首次运行、本机没有任何引擎：自动从官方 Releases 取一份。
+    ///
+    /// 正式发布的构建**不带**引擎种子（把 scrcpy 的二进制打进安装包就是重分发，
+    /// 会触发 GPLv3 的传染性，我们这个项目就不能是 MIT 了），所以对下载安装的用户
+    /// 来说这是必经之路 —— 必须自动完成，否则是一个装完不能用的 App。
+    private func autoInstallEngine() {
+        isPreparingEngine = true
+        engineMessage = "首次运行，正在获取 scrcpy 引擎…"
+        appendLog("[引擎] 本机没有引擎，自动从官方 Releases 获取一份。\n")
+
+        updater.check(current: "0") { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(.available(let info)):
+                    self.pendingUpdate = info
+                    self.install(info, isFirstRun: true)
+                case .success(.upToDate), .success(.notModified):
+                    // 当前版本传的是 "0"，不该被判成最新。真发生了说明版本比较坏了。
+                    self.failEngineSetup("版本比较异常，请点上面的「检查更新」手动装一次。")
+                case .failure(let error):
+                    self.failEngineSetup(error.localizedDescription)
                 }
             }
         }
+    }
+
+    private func failEngineSetup(_ reason: String) {
+        isPreparingEngine = false
+        engineMessage = "获取引擎失败：\(reason)"
+        appendLog("[引擎缺失] \(reason)\n")
     }
 
     private func acceptEngine(_ info: EngineInfo, note: String?) {
@@ -417,20 +458,28 @@ final class AppModel: ObservableObject {
 
     // MARK: - 更新
 
-    func checkForUpdates() {
+    /// 检查引擎更新。
+    ///
+    /// `silent` 是启动时那次后台检查用的：**只在发现新版时才动界面**。
+    /// 「已是最新」「没网」「被 GitHub 限流」这些都不该在启动时弹给用户看 ——
+    /// 他什么都没点，凭什么要读一条错误。
+    func checkForUpdates(silent: Bool = false) {
         guard !isRunning else {
-            updateState = .failed("请先停止投屏再检查更新。")
+            if !silent { updateState = .failed("请先停止投屏再检查更新。") }
             return
         }
         let current = engine?.version ?? "0"
-        updateState = .checking
-        appendLog("[更新] 正在检查（当前 \(current)）…\n")
+        if !silent {
+            updateState = .checking
+            appendLog("[更新] 正在检查（当前 \(current)）…\n")
+        }
 
         updater.check(current: current) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(.upToDate(let version)), .success(.notModified(let version)):
+                    guard !silent else { return }
                     self.updateState = .upToDate(version)
                     self.appendLog("[更新] 已是最新版 \(version)。\n")
                 case .success(.available(let info)):
@@ -438,6 +487,7 @@ final class AppModel: ObservableObject {
                     self.updateState = .available(info.version)
                     self.appendLog("[更新] 发现新版本 scrcpy \(info.version)。\n")
                 case .failure(let error):
+                    guard !silent else { return }
                     self.updateState = .failed(error.localizedDescription)
                     self.appendLog("[更新] 检查失败：\(error.localizedDescription)\n")
                 }
@@ -451,6 +501,12 @@ final class AppModel: ObservableObject {
             updateState = .failed("请先停止投屏再更新。")
             return
         }
+        install(info, isFirstRun: false)
+    }
+
+    /// 下载并安装。首次自动装与用户手动点「更新到 x.y.z」走的是同一条路，
+    /// 只有收尾时给出的反馈不同。
+    private func install(_ info: ReleaseInfo, isFirstRun: Bool) {
         updateState = .downloading(0)
         appendLog("[更新] 开始下载 scrcpy \(info.version)（\(info.assetName)）…\n")
 
@@ -462,15 +518,19 @@ final class AppModel: ObservableObject {
                 switch result {
                 case .success(let staging):
                     do {
-                        let info = try self.engineStore.install(from: staging)
-                        self.engine = info
-                        self.updateState = .installed(info.version)
-                        self.appendLog("[更新] 已更新到 scrcpy \(info.version)。\n")
+                        // acceptEngine 而不是只赋值 `engine`：它顺带把 isPreparingEngine
+                        // 收掉、清掉 engineMessage，并热一次 adb、刷一次设备列表 ——
+                        // 首次自动装完这一串都必须做，否则界面会停在「正在准备引擎」。
+                        let installed = try self.engineStore.install(from: staging)
+                        self.acceptEngine(installed, note: "[更新] 引擎已就绪：scrcpy \(installed.version)。\n")
+                        self.updateState = isFirstRun ? .engineReady(installed.version) : .installed(installed.version)
                     } catch {
+                        self.failEngineSetup(error.localizedDescription)
                         self.updateState = .failed(error.localizedDescription)
                         self.appendLog("[更新] 安装失败：\(error.localizedDescription)\n")
                     }
                 case .failure(let error):
+                    self.failEngineSetup(error.localizedDescription)
                     self.updateState = .failed(error.localizedDescription)
                     self.appendLog("[更新] 下载失败：\(error.localizedDescription)\n")
                 }

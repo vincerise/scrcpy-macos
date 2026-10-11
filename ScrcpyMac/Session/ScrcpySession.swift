@@ -99,8 +99,13 @@ final class ScrcpySession {
             throw SessionError.noEngine
         }
 
+        // 实际 exec 的不是引擎目录里那个 scrcpy，而是迷你 .app 里的一份。
+        // 只有待在 bundle 里，进程才拿得到「没有程序坞图标但窗口能用」的激活策略，
+        // 细节见 `EngineStore.prepareMirrorApp`。
+        let launcher = try engineStore.prepareMirrorApp(for: info)
+
         let process = Process()
-        process.executableURL = scrcpy
+        process.executableURL = launcher
         process.arguments = arguments
         // 工作目录设成引擎目录：scrcpy 会在 cwd 下找一些相对路径的资源，
         // 而 App 自己的 cwd 是 `/`（从 Finder 启动时）。
@@ -119,6 +124,10 @@ final class ScrcpySession {
         environment["ADB"] = adb.path
         environment["SCRCPY_SERVER_PATH"] = server.path
         environment["SCRCPY_ICON_DIR"] = info.dir.path
+        // 这个 hint 必须给：SDL3 的 Cocoa 后端在没有它的时候会把进程**强制**设成
+        // regular 激活策略，bundle 里的 LSUIElement 会被它盖掉，程序坞里照旧多一个图标。
+        // 给了它，SDL 就完全不碰激活策略，进程保持 bundle 定的 accessory。
+        environment["SDL_MAC_BACKGROUND_APP"] = "1"
         process.environment = environment
 
         let pipe = Pipe()

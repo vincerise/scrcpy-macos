@@ -12,7 +12,7 @@ import AppKit
 enum MainMenu {
 
     static func build() -> NSMenu {
-        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Scrcpy"
+        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "ScrcpyMac"
         let main = NSMenu()
         main.addItem(appMenuItem(appName: appName))
         main.addItem(editMenuItem())

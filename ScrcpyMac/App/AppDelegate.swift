@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let engine = model?.engine.map { "scrcpy \($0.version)" } ?? "引擎未安装"
 
         NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "Scrcpy",
+            .applicationName: "ScrcpyMac",
             .applicationVersion: version,
             .credits: NSAttributedString(
                 string: """
