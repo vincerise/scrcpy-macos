@@ -1,0 +1,95 @@
+name: Scrcpy
+options:
+  bundleIdPrefix: com.vincerise
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # ad-hoc 签名。没有 Developer ID，也永远无法公证 —— 本地构建不带 quarantine，
+    # 所以不会弹「未识别开发者」。见 README「签名」一节。
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Automatic
+    # 不开硬化运行时：我们要 exec 引擎目录里的 scrcpy/adb 子进程，
+    # 硬化运行时会连带限制子进程，且对本地工具没有任何收益。
+    ENABLE_HARDENED_RUNTIME: NO
+    # 必须是 minimal。Swift 6 的严格并发会让 AppKit delegate 和
+    # readabilityHandler 闭包炸出一堆 sendability 错误，而这里的并发是安全的。
+    SWIFT_STRICT_CONCURRENCY: minimal
+    # 通用二进制：同时支持 Apple Silicon 与 Intel。
+    # 注意引擎（scrcpy 本体）是按架构分别下载的，与这里无关。
+    ARCHS: "arm64 x86_64"
+    ONLY_ACTIVE_ARCH: NO
+    # 构建脚本要读写 SRCROOT 下的 engine/，Xcode 15+ 默认沙盒会拦住。
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+schemes:
+  Scrcpy:
+    build:
+      targets:
+        Scrcpy: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+
+targets:
+  Scrcpy:
+    type: application
+    platform: macOS
+    sources:
+      - path: Scrcpy
+    entitlements:
+      path: Scrcpy/Scrcpy.entitlements
+      properties:
+        # 明确关闭沙盒。沙盒会禁止 Process 执行沙盒外的任意二进制
+        # （也就是我们的 scrcpy/adb 引擎），整个方案直接失效。
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.client: true
+    info:
+      path: Scrcpy/Info.plist
+      properties:
+        CFBundleName: Scrcpy
+        CFBundleDisplayName: Scrcpy
+        # 图标由 Assets.xcassets/AppIcon 编译成 AppIcon.icns。
+        # 手写 Info.plist（GENERATE_INFOPLIST_FILE=NO）时两个键都写上更稳：
+        # CFBundleIconFile 给 Finder/Dock，CFBundleIconName 给新版资产目录查找。
+        CFBundleIconFile: AppIcon
+        CFBundleIconName: AppIcon
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHighResolutionCapable: true
+        # 无线 adb（adb connect <手机IP>）在 macOS 15 会触发本地网络隐私授权。
+        # adb 是我们的子进程，系统按 responsible process 把权限归因到本 App，
+        # 所以这条文案出现在弹窗里。不写的话弹窗说明是空白的，
+        # 用户很容易误点「不允许」—— 而一旦拒绝就不会再弹第二次。
+        NSLocalNetworkUsageDescription: 用于通过 Wi-Fi 连接 Android 设备（adb connect）进行投屏。USB 连接不需要此权限。
+        NSHumanReadableCopyright: Scrcpy 引擎版权归 rom1v 所有（GPLv3），本项目为非官方封装。
+        # 刻意不写 LSUIElement / LSBackgroundOnly：写了就不进启动台、没有程序坞图标。
+        # 刻意不写 NSSupportsSuddenTermination：我们是子进程的 supervisor，
+        # 退出时必须发 SIGTERM 让 scrcpy 清理设备上的 scrcpy-server，不能被系统直接杀。
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vincerise.scrcpy
+        PRODUCT_NAME: Scrcpy
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # 让**系统控件**也认这个强调色。SwiftUI 的 `.tint()` 管不到 macOS 的
+        # `NSSwitch`（开关打开时仍画系统蓝），资产目录里的 AccentColor 才能改到
+        # `NSColor.controlAccentColor` —— 开关、焦点环、文本选中一起跟着变。
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+    postBuildScripts:
+      - name: Seed scrcpy engine
+        basedOnDependencyAnalysis: false
+        script: |
+          "${SRCROOT}/scripts/seed-engine.sh" "${BUILT_PRODUCTS_DIR}/${FULL_PRODUCT_NAME}"
