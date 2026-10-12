@@ -183,7 +183,7 @@ private struct DeviceRowView: View {
     private var subtitle: String {
         guard let device = row.device else { return "设备已断开" }
         guard device.isReady else { return device.statusText }
-        return "\(device.serial) · \(device.connectionKind.rawValue)"
+        return "\(device.serial) · \(device.connectionLabel)"
     }
 
     private var detail: String {

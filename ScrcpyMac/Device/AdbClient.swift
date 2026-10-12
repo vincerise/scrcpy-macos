@@ -18,20 +18,9 @@ struct AdbDevice: Identifiable, Equatable {
     /// TCP/IP 连上的设备 serial 形如 `192.168.1.5:5555`，USB 的是一串序列号。
     var isWireless: Bool { serial.contains(":") }
 
-    /// 连接方式，只用来显示。
-    ///
-    /// 不能只按 `isWireless` 二分成「USB / Wi-Fi」：模拟器的 serial 是 `emulator-5554`，
-    /// 既没有 `:` 也不是真机序列号，会被标成「USB」。
-    enum ConnectionKind: String {
-        case usb = "USB"
-        case wireless = "Wi-Fi"
-        case emulator = "模拟器"
-    }
-
-    var connectionKind: ConnectionKind {
-        if serial.hasPrefix("emulator-") { return .emulator }
-        return isWireless ? .wireless : .usb
-    }
+    /// 连接方式，只用来显示。TCP/IP 连上的设备 serial 形如 `192.168.1.5:5555`，
+    /// USB 的是一串序列号。
+    var connectionLabel: String { isWireless ? "Wi-Fi" : "USB" }
 
     var displayName: String {
         if let model, !model.isEmpty { return model }
@@ -69,6 +58,11 @@ enum AdbParse {
             // 只认「至少两列」的行。adb 偶尔会把 `* daemon not running; starting now at tcp:5037`
             // 这类提示混在同一个输出流里，它们的第一列以 `*` 开头且没有第二列状态。
             guard tokens.count >= 2 else { continue }
+
+            // 模拟器不列进来：它本来就跑在这台电脑上，再开一路 scrcpy 只是把眼前的画面
+            // 又投一遍。留着它还会占掉「全部投屏」的一个名额。判据是 adb 给模拟器的
+            // serial 固定以 `emulator-` 开头。
+            if tokens[0].hasPrefix("emulator-") { continue }
 
             var model: String?
             var product: String?
