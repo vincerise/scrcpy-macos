@@ -274,8 +274,14 @@ struct MainView: View {
                 ])
             }
             SettingsRowDivider()
-            SettingsRow("视频码率", hint: "越高越清晰，也越吃带宽。Wi-Fi 不稳就往下调") {
+            SettingsRow("视频码率", hint: "越高越清晰，也越吃带宽。能开多高由手机的编码器决定，Wi-Fi 不稳就往下调") {
+                // 一直列到 50 Mbps，而不是停在 8 —— 走 USB 时 8 Mbps 离手机上编码器的
+                // 上限差得远（这台 moto 的 avc 编码器自报 1–100 Mbps），默认那几个值
+                // 会让人以为「最高就这样」。再高就用「额外参数」里的 --video-bit-rate。
                 ChoiceChip(selection: model.binding(\.videoBitRate), options: [
+                    .init(value: "50M", title: "50 Mbps"),
+                    .init(value: "32M", title: "32 Mbps"),
+                    .init(value: "16M", title: "16 Mbps"),
                     .init(value: "8M", title: "8 Mbps"),
                     .init(value: "4M", title: "4 Mbps"),
                     .init(value: "2M", title: "2 Mbps"),
