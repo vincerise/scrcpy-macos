@@ -266,6 +266,9 @@ struct MenuRow: View {
     var color: Color? = nil
     var isChecked = false
     var isEnabled = true
+    /// 危险动作（断开连接、删除）用红字。系统菜单靠 `NSMenuItem` 的
+    /// `isDestructive` 做同一件事，自绘菜单得自己来。
+    var isDestructive = false
     let action: () -> Void
 
     @State private var isHovering = false
@@ -297,7 +300,7 @@ struct MenuRow: View {
                 }
                 Spacer(minLength: 8)
             }
-            .foregroundStyle(isEnabled ? Color.primary : Theme.Palette.tertiaryText)
+            .foregroundStyle(foreground)
             .padding(.horizontal, 12)
             .frame(height: 28)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -311,6 +314,11 @@ struct MenuRow: View {
         )
         .onHover { isHovering = $0 }
         .disabled(!isEnabled)
+    }
+
+    private var foreground: Color {
+        guard isEnabled else { return Theme.Palette.tertiaryText }
+        return isDestructive ? Theme.Palette.danger : .primary
     }
 }
 

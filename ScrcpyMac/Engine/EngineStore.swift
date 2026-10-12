@@ -61,6 +61,9 @@ final class EngineStore: @unchecked Sendable {
     private static let optionalFiles = ["scrcpy.png", "disconnected.png", "scrcpy.1", "LICENSE"]
 
     private let lock = NSLock()
+    /// `prepareMirrorApp` 专用的锁。与 `lock` 分开：那个锁保护的是解析结果缓存，
+    /// 而这里要覆盖的是「判断 → 删 → 链接」这段落盘过程，两者的临界区互不相干。
+    private static let mirrorLock = NSLock()
     /// `current()` 会 fork 进程跑 `scrcpy --version`。UI 在 SwiftUI 的 body 里调用它，
     /// 一次刷新就能触发成百上千次进程创建，所以把成功结果记下来。
     private var cached: EngineInfo?
@@ -267,7 +270,17 @@ final class EngineStore: @unchecked Sendable {
     ///
     /// 每次启动都调，但只有内容对不上时才真的落盘：引擎更新换的是整个目录
     /// （新的 inode），这里跟着重新链一次就行。
+    ///
+    /// 整个过程在 `mirrorLock` 里。之前它靠「调用方都在主线程」隐式串行，
+    /// 而多设备之后「同时点两台设备的投屏」正是要做的事：两个线程一起走到
+    /// 「判断 → removeItem → link」之间，后一个的 link 会拿到 EEXIST，
+    /// 落到拷贝分支又因为目标已存在而失败 —— 用户看到的是一句和真实原因
+    /// 毫无关系的「无法把 scrcpy 放进 …」。加锁之后这不再可能，
+    /// 下面再补一道 inode 核对，防止将来有人绕过这把锁。
     func prepareMirrorApp(for info: EngineInfo) throws -> URL {
+        EngineStore.mirrorLock.lock()
+        defer { EngineStore.mirrorLock.unlock() }
+
         let fm = FileManager.default
         let source = info.dir.appendingPathComponent("scrcpy")
         let dest = mirrorExecutableURL
@@ -285,16 +298,19 @@ final class EngineStore: @unchecked Sendable {
             // 跨卷（App 装在别的盘上）才退化成拷贝。
             try? fm.removeItem(at: dest)
             if link(source.path, dest.path) != 0 {
-                do {
-                    try fm.copyItem(at: source, to: dest)
-                    // 拷贝出来的 mtime 是「现在」，下次比对上会永远不相等，
-                    // 于是每次启动都重拷一份。对齐成源文件的，让两种情况共用同一套判断。
-                    if let mtime = try? source.resourceValues(forKeys: [.contentModificationDateKey])
-                        .contentModificationDate {
-                        try? fm.setAttributes([.modificationDate: mtime], ofItemAtPath: dest.path)
+                // 目标是别人刚建好的同一份，那就当成功。EEXIST 不是错误。
+                if !isUpToDate(dest, against: source) {
+                    do {
+                        try fm.copyItem(at: source, to: dest)
+                        // 拷贝出来的 mtime 是「现在」，下次比对上会永远不相等，
+                        // 于是每次启动都重拷一份。对齐成源文件的，让两种情况共用同一套判断。
+                        if let mtime = try? source.resourceValues(forKeys: [.contentModificationDateKey])
+                            .contentModificationDate {
+                            try? fm.setAttributes([.modificationDate: mtime], ofItemAtPath: dest.path)
+                        }
+                    } catch {
+                        throw EngineError.installFailed("无法把 scrcpy 放进 \(dest.path)：\(error.localizedDescription)")
                     }
-                } catch {
-                    throw EngineError.installFailed("无法把 scrcpy 放进 \(dest.path)：\(error.localizedDescription)")
                 }
             }
             try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)

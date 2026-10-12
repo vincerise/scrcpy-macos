@@ -12,6 +12,8 @@ import SwiftUI
 struct LogConsole: View {
 
     let lines: [AppModel.LogLine]
+    /// 多设备时在行首标出这行是哪台设备吐的。只看单台时不必标 —— 满屏都是同一台。
+    var showsSourceTags = false
 
     @State private var proxy: ScrollViewProxy?
     /// 视图底部锚点的 id。滚到它即为滚到底。
@@ -29,12 +31,7 @@ struct LogConsole: View {
             ThinScrollView(onProxy: { proxy = $0 }) {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(lines) { line in
-                        Text(line.text)
-                            .font(.system(size: Theme.FontSize.log, design: .monospaced))
-                            .foregroundStyle(color(for: line.text))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        row(for: line)
                     }
                     // 零高度的锚点，用来「滚到底」。
                     Color.clear.frame(height: 1).id(bottomAnchor)
@@ -56,6 +53,33 @@ struct LogConsole: View {
                 proxy.scrollTo(bottomAnchor, anchor: .bottom)
             }
         }
+    }
+
+    /// 一行日志。带来源时把标签单独画一个 `Text`，不用「拼进正文」的写法 ——
+    /// 拼进去的话标签会跟着正文一起被染成错误红，而且换行时对不齐。
+    @ViewBuilder
+    private func row(for line: AppModel.LogLine) -> some View {
+        if showsSourceTags, let source = line.source {
+            HStack(alignment: .top, spacing: 6) {
+                Text("[\(source.name)]")
+                    .font(.system(size: Theme.FontSize.log, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.tertiaryText)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                body(of: line)
+            }
+        } else {
+            body(of: line)
+        }
+    }
+
+    private func body(of line: AppModel.LogLine) -> some View {
+        Text(line.text)
+            .font(.system(size: Theme.FontSize.log, design: .monospaced))
+            .foregroundStyle(color(for: line.text))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 只给两类行上色：错误红、我们自己的状态行用强调色。

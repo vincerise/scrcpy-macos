@@ -40,6 +40,9 @@ final class ScrcpySession {
     var onStateChange: ((State) -> Void)?
     var onExit: ((Int32) -> Void)?
 
+    /// 这一场会话对应哪台设备。pid 文件名由它派生，日志也按它分流。
+    let serial: String
+
     private let engineStore = EngineStore.shared
 
     private let lock = NSLock()
@@ -59,7 +62,9 @@ final class ScrcpySession {
     /// 收到 SIGTERM 后还等多久才强杀。
     private let stopGrace: TimeInterval = 3
 
-    init() {}
+    init(serial: String) {
+        self.serial = serial
+    }
 
     var state: State {
         lock.lock(); defer { lock.unlock() }
@@ -181,7 +186,7 @@ final class ScrcpySession {
         }
 
         let pid = process.processIdentifier
-        let pidFile = supportDir.appendingPathComponent("session.pid")
+        let pidFile = supportDir.appendingPathComponent(ScrcpySession.pidFileName(for: serial))
 
         lock.lock()
         _childPID = pid
@@ -365,6 +370,37 @@ final class ScrcpySession {
 
     // MARK: - 孤儿清理
 
+    /// pid 文件名：每台设备一份，互不覆盖。
+    ///
+    /// 不能直接把 serial 拼进文件名 —— 它是外部输入（`adb devices` 的输出、
+    /// 用户手输的 `adb connect` 地址），带 `/` 时 `appendingPathComponent` 拦不住路径穿越；
+    /// 只把 `:` 换成 `_` 又**不单射**：`192.168.1.5:5555` 与真实存在的 `192.168.1.5_5555`
+    /// 会落到同一个文件上，撞了之后其中一个进程就永远回收不掉。
+    /// 所以净化后的 serial 只用来让人看得懂，唯一性由后面那截稳定哈希保证。
+    ///
+    /// 哈希必须跨启动稳定（pid 文件是这一次运行写、下一次运行读的），
+    /// 所以不能用 `hashValue` —— 它每个进程都不同。这里用 FNV-1a。
+    static func pidFileName(for serial: String) -> String {
+        var safe = ""
+        for scalar in serial.unicodeScalars {
+            let isSafe = scalar.isASCII
+                && (CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == ".")
+            safe.append(isSafe ? Character(scalar) : "_")
+        }
+        // 文件名长度上限 255 字节，mDNS 形态的 serial 本身就能很长，先截断再拼哈希。
+        if safe.count > 40 { safe = String(safe.prefix(40)) }
+        return "session.\(safe)-\(fnv1a(serial)).pid"
+    }
+
+    private static func fnv1a(_ text: String) -> String {
+        var hash: UInt32 = 2_166_136_261
+        for byte in text.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return String(format: "%08x", hash)
+    }
+
     /// 清理上次残留的孤儿进程。
     ///
     /// App 被强杀（崩溃、强制退出、断电）时来不及发 SIGTERM，scrcpy 会留在后台，
@@ -373,28 +409,45 @@ final class ScrcpySession {
     /// `engineRoots` 要**把所有可能启动过子进程的引擎目录都列上**：当前生效的可能是
     /// Application Support 那份，也可能是 bundle 里的内置种子；而残留进程来自哪一次
     /// 运行是未知的 —— 只按当前那一个比对，换过引擎之后就再也回收不掉。
+    ///
+    /// 文件是按设备分的，所以这里要**逐个处理完再删**：早先的 `defer` 只照顾单个文件，
+    /// 改成循环之后很容易漏成「只删掉最后一个」。
     static func reapOrphans(supportDir: URL, engineRoots: [URL]) {
-        let file = supportDir.appendingPathComponent("session.pid")
         let fm = FileManager.default
-        defer { try? fm.removeItem(at: file) }
+        guard let entries = try? fm.contentsOfDirectory(at: supportDir,
+                                                        includingPropertiesForKeys: nil,
+                                                        options: []) else { return }
 
-        guard let text = try? String(contentsOf: file, encoding: .utf8),
-              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-              pid > 1 else { return }
-
-        // 光凭 pid 还活着就杀是不行的：pid 会被系统回收复用，
-        // 隔一段时间之后那个号很可能属于完全不相干的进程。
-        // 所以再核对一次它的可执行路径确实落在引擎目录里。
-        guard kill(pid, 0) == 0 || errno == EPERM else { return }
-        guard let path = executablePath(of: pid) else { return }
+        // 按前后缀匹配而不是裸 glob：以后 supportDir 里还会有别的 session* 文件。
+        // 老版本那份全局的 `session.pid` 也落在这个规则里，升级后第一次启动照样回收得到。
+        let pidFiles = entries.filter {
+            $0.lastPathComponent.hasPrefix("session") && $0.pathExtension == "pid"
+        }
+        guard !pidFiles.isEmpty else { return }
 
         let roots = engineRoots.map { $0.standardizedFileURL.path }
-        // 必须按路径分隔符比边界。裸 hasPrefix 会把 `/x/engine-other/scrcpy`
-        // 也算成 `/x/engine` 里的进程，那就会杀错人。
-        let isOurs = roots.contains { path == $0 || path.hasPrefix($0 + "/") }
-        guard isOurs else { return }
 
-        kill(pid, SIGTERM)
+        for file in pidFiles {
+            // 每个文件处理完就删；defer 在循环体里是「每轮结束」而不是「函数结束」。
+            defer { try? fm.removeItem(at: file) }
+
+            guard let text = try? String(contentsOf: file, encoding: .utf8),
+                  let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  pid > 1 else { continue }
+
+            // 光凭 pid 还活着就杀是不行的：pid 会被系统回收复用，
+            // 隔一段时间之后那个号很可能属于完全不相干的进程。
+            // 所以再核对一次它的可执行路径确实落在引擎目录里。
+            guard kill(pid, 0) == 0 || errno == EPERM else { continue }
+            guard let path = executablePath(of: pid) else { continue }
+
+            // 必须按路径分隔符比边界。裸 hasPrefix 会把 `/x/engine-other/scrcpy`
+            // 也算成 `/x/engine` 里的进程，那就会杀错人。
+            let isOurs = roots.contains { path == $0 || path.hasPrefix($0 + "/") }
+            guard isOurs else { continue }
+
+            kill(pid, SIGTERM)
+        }
     }
 
     private static func executablePath(of pid: pid_t) -> String? {

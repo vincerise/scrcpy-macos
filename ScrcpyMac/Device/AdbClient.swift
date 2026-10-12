@@ -18,6 +18,21 @@ struct AdbDevice: Identifiable, Equatable {
     /// TCP/IP 连上的设备 serial 形如 `192.168.1.5:5555`，USB 的是一串序列号。
     var isWireless: Bool { serial.contains(":") }
 
+    /// 连接方式，只用来显示。
+    ///
+    /// 不能只按 `isWireless` 二分成「USB / Wi-Fi」：模拟器的 serial 是 `emulator-5554`，
+    /// 既没有 `:` 也不是真机序列号，会被标成「USB」。
+    enum ConnectionKind: String {
+        case usb = "USB"
+        case wireless = "Wi-Fi"
+        case emulator = "模拟器"
+    }
+
+    var connectionKind: ConnectionKind {
+        if serial.hasPrefix("emulator-") { return .emulator }
+        return isWireless ? .wireless : .usb
+    }
+
     var displayName: String {
         if let model, !model.isEmpty { return model }
         return serial
@@ -130,6 +145,14 @@ final class AdbClient: @unchecked Sendable {
             return candidate
         }
         return nil
+    }
+
+    /// 把设备屏幕按灭。
+    ///
+    /// 用 `KEYCODE_SLEEP`(223) 而不是 `KEYCODE_POWER`(26)：后者是**开关**，
+    /// 屏幕本来就灭着时再按一下会把它点亮 —— 而这里要的是「结果一定是灭的」。
+    func sleepScreen(serial: String, timeout: TimeInterval = 8) {
+        _ = Shell.run(adbPath, ["-s", serial, "shell", "input", "keyevent", "223"], timeout: timeout)
     }
 
     /// 预热：后台跑一次 `adb start-server`。

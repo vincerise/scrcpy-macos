@@ -39,18 +39,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 点程序坞图标时：把控制面板拉回来，顺手把正在跑的镜像窗口也拉到前台
     /// —— 它们是两个进程、两个 Dock 图标，用户分不清哪个是哪个。
+    ///
+    /// 镜像窗口在**别的应用**（`Mirror.app`）名下，所以程序坞右键那份系统窗口列表里
+    /// 永远不会有它们；点图标走这条回调是唯一的系统级入口，必须把窗口真的带上来。
+    /// 具体怎么绕过 macOS 14 的协作式激活见 `MirrorWindows`。
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         mainWindowController?.showWindow(nil)
-        if let pid = model?.childPID, let child = NSRunningApplication(processIdentifier: pid) {
-            child.activate()
-        }
+        MirrorWindows.reveal(pids: model?.childPIDs ?? [])
         return true
+    }
+
+    /// 程序坞右键菜单。
+    ///
+    /// 系统默认那份「显示所有窗口」列的是**本 App 自己**的窗口，而镜像窗口属于
+    /// `Mirror.app`，永远不会出现在里面 —— 用户右键找不到投屏窗口，不是设置问题，
+    /// 是那份列表的定义如此。既然系统不会列，就自己列。
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let mirrors = model?.runningMirrors ?? []
+        guard !mirrors.isEmpty else { return nil }
+
+        let menu = NSMenu()
+        for mirror in mirrors {
+            let item = NSMenuItem(title: "显示 \(mirror.name) 的投屏窗口",
+                                  action: #selector(showMirrorFromDock(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            // 用 serial 而不是下标：菜单弹出到用户点中之间，设备可能已经掉了。
+            item.representedObject = mirror.serial
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let stop = NSMenuItem(title: "全部停止投屏", action: #selector(stopAllFromDock), keyEquivalent: "")
+        stop.target = self
+        menu.addItem(stop)
+        return menu
+    }
+
+    @objc private func showMirrorFromDock(_ sender: NSMenuItem) {
+        guard let serial = sender.representedObject as? String else { return }
+        model?.bringMirrorToFront(serial: serial)
+    }
+
+    @objc private func stopAllFromDock() {
+        model?.stopAll()
     }
 
     /// 退出前必须等 scrcpy 收 SIGTERM 自己退 —— 它要删掉设备上的
     /// `scrcpy-server.jar`、恢复息屏与保持唤醒状态。直接退出会把这些留在手机上。
+    /// 多设备时每一路都要等，且是并行等（超时兜底在 `stopForTermination` 里）。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model, model.isRunning else {
+        guard let model, model.anySessionActive else {
             model?.shutdown()
             return .terminateNow
         }
