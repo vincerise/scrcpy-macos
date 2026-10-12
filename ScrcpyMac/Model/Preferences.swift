@@ -37,7 +37,7 @@ struct DeviceSettings: Equatable, Codable {
     /// 那份决定「这台设备第一次读到的值」，这份决定「JSON 里缺这个字段时的值」。
     static let fallback = DeviceSettings(
         maxSize: 0,
-        videoBitRate: "8M",
+        videoBitRate: "auto",
         maxFPS: 0,
         audioEnabled: true,
         turnScreenOff: false,
@@ -127,7 +127,7 @@ final class Preferences {
         // 就得额外判空。
         defaults.register(defaults: [
             Key.maxSize: 0,
-            Key.videoBitRate: "8M",
+            Key.videoBitRate: "auto",
             Key.maxFPS: 0,
             Key.audioEnabled: true,
             Key.turnScreenOff: false,
@@ -259,6 +259,44 @@ final class Preferences {
         var windowTitle: String?
         /// 第几个窗口（从 0 数）。给了就按它阶梯错开，nil = 不干预位置。
         var windowSlot: Int?
+        /// 这台设备的视频编码器自报的码率上限。只有「自动」档位用得上，nil = 没读到。
+        var bitrateCeiling: Int?
+    }
+
+    /// 码率的「自动」档位落到哪个值。
+    ///
+    /// 问得到上限就按设备来：**上限在手机那颗编码器上，不在线上** —— USB2 的 adb 通道
+    /// 也有 200 Mbps 量级，插着线的时候瓶颈从来不是线。问不出来（老机型没有那份 XML）
+    /// 就用 20M：1080p60 下这是肉眼无损的量级，也远在任何手机的编码能力之内。
+    ///
+    /// Wi-Fi 反过来刻意留余量：无线的实际吞吐随距离、干扰、同频设备浮动，
+    /// 码率贴着上限给的结果是卡，不是更清晰。
+    static func resolvedVideoBitRate(_ stored: String, device: AdbDevice?, ceiling: Int?) -> String {
+        guard stored == autoBitRate else { return stored }
+        let bits = autoBitRateBits(device: device, ceiling: ceiling)
+        // scrcpy 的 -b 直接收 bits/s，不加后缀就是原值。
+        return "\(bits)"
+    }
+
+    /// 「自动」档位在界面上被选中时用的那个标记值。
+    static let autoBitRate = "auto"
+    /// 「自动」在 USB 上问不出编码器上限时的兜底：一个不会出错、也够用的常规值。
+    static let fallbackBitRateBits = 20_000_000
+    /// 「自动」在 Wi-Fi 上的取值。无线链路留给它 8 Mbps 的余量。
+    static let wirelessBitRateBits = 8_000_000
+
+    static func autoBitRateBits(device: AdbDevice?, ceiling: Int?) -> Int {
+        // 设备未知（比如无线地址还没连上）时按 Wi-Fi 那一档算：宁可小，不可卡。
+        guard let device, !device.isWireless else { return wirelessBitRateBits }
+        return ceiling ?? fallbackBitRateBits
+    }
+
+    /// 把 bits/s 写成界面上看的「60 Mbps」。
+    static func bitRateLabel(bits: Int) -> String {
+        let mbps = Double(bits) / 1_000_000
+        return mbps == mbps.rounded()
+            ? "\(Int(mbps)) Mbps"
+            : String(format: "%.1f Mbps", mbps)
     }
 
     /// 组装 scrcpy 的命令行参数（不含可执行文件路径）。
@@ -280,7 +318,10 @@ final class Preferences {
         }
         if !settings.videoBitRate.isEmpty {
             // 用 --video-bit-rate：--bit-rate 是废弃别名，5.0 的 --help 里已经只剩前者。
-            generated.append("--video-bit-rate=\(settings.videoBitRate)")
+            let bitRate = Preferences.resolvedVideoBitRate(settings.videoBitRate,
+                                                           device: context.device,
+                                                           ceiling: context.bitrateCeiling)
+            generated.append("--video-bit-rate=\(bitRate)")
         }
         if settings.maxFPS > 0 {
             generated.append("--max-fps=\(settings.maxFPS)")

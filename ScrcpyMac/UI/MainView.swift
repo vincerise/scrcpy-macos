@@ -262,6 +262,45 @@ struct MainView: View {
 
     // MARK: - 画面
 
+    /// 码率可选项跟着**这台设备**报出来的编码器上限走：问得到就列到那个数为止，
+    /// 问不出来就摆一套常规值。往下列没有意义 —— 手机编码器不会兑现超过上限的值，
+    /// 而列着它只会让人以为「选了就更清楚」。再往上还有「额外参数」那条路。
+    private var bitRateOptions: [ChoiceChip<String>.Option] {
+        // 1/2/4/8… 这套阶梯只到 50：再往上一档就是设备的实际上限，单独列出来更清楚。
+        let ladder = [1, 2, 4, 8, 16, 32, 50]
+        let ceilingMbps = model.bitrateCeiling(for: model.selectedSerial).map { $0 / 1_000_000 }
+        let top = ceilingMbps ?? ladder[ladder.count - 1]
+
+        var options: [ChoiceChip<String>.Option] = [
+            .init(value: Preferences.autoBitRate, title: "自动"),
+        ]
+        if let ceilingMbps, !ladder.contains(ceilingMbps) {
+            options.append(.init(value: "\(ceilingMbps)M", title: "\(ceilingMbps) Mbps（本机上限）"))
+        }
+        for mbps in ladder.reversed() where mbps <= top {
+            options.append(.init(value: "\(mbps)M", title: "\(mbps) Mbps"))
+        }
+        return options
+    }
+
+    /// 选中「自动」时把落脚点写明，不然「自动」是个黑箱 —— 它其实取决于插线还是无线。
+    private var bitRateHint: String {
+        guard model.editedSettings.videoBitRate == Preferences.autoBitRate else {
+            if let ceiling = model.bitrateCeiling(for: model.selectedSerial) {
+                return "越高越清晰，也越吃带宽。这台的编码器上限是 \(Preferences.bitRateLabel(bits: ceiling))，再高它也不兑现"
+            }
+            return "越高越清晰，也越吃带宽。Wi-Fi 不稳就往下调"
+        }
+
+        let bits = Preferences.autoBitRateBits(device: model.selectedRow?.device,
+                                               ceiling: model.bitrateCeiling(for: model.selectedSerial))
+        let label = Preferences.bitRateLabel(bits: bits)
+        let reason = model.selectedRow?.device?.isWireless == false
+            ? "USB 上按这台编码器的能力给"
+            : "无线链路留足余量"
+        return "自动：\(reason)，\(label)。问不出上限或换了网络就退回 20 Mbps / 8 Mbps"
+    }
+
     private var videoCard: some View {
         SettingsCard {
             SettingsRow("分辨率上限", hint: "限制画面长边。手机仍按原分辨率渲染，这里只压投屏的画质") {
@@ -274,19 +313,8 @@ struct MainView: View {
                 ])
             }
             SettingsRowDivider()
-            SettingsRow("视频码率", hint: "越高越清晰，也越吃带宽。能开多高由手机的编码器决定，Wi-Fi 不稳就往下调") {
-                // 一直列到 50 Mbps，而不是停在 8 —— 走 USB 时 8 Mbps 离手机上编码器的
-                // 上限差得远（这台 moto 的 avc 编码器自报 1–100 Mbps），默认那几个值
-                // 会让人以为「最高就这样」。再高就用「额外参数」里的 --video-bit-rate。
-                ChoiceChip(selection: model.binding(\.videoBitRate), options: [
-                    .init(value: "50M", title: "50 Mbps"),
-                    .init(value: "32M", title: "32 Mbps"),
-                    .init(value: "16M", title: "16 Mbps"),
-                    .init(value: "8M", title: "8 Mbps"),
-                    .init(value: "4M", title: "4 Mbps"),
-                    .init(value: "2M", title: "2 Mbps"),
-                    .init(value: "1M", title: "1 Mbps"),
-                ])
+            SettingsRow("视频码率", hint: bitRateHint) {
+                ChoiceChip(selection: model.binding(\.videoBitRate), options: bitRateOptions)
             }
             SettingsRowDivider()
             SettingsRow("帧率上限", hint: "玩游戏可以拉到 60，看文档 30 更省电") {

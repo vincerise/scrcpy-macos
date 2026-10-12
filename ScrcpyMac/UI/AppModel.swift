@@ -242,6 +242,11 @@ final class AppModel: ObservableObject {
     /// 每台设备的一个会话对象只服务一次启动，这条路径就不存在了。
     private var sessions: [String: ScrcpySession] = [:]
 
+    /// 每台设备视频编码器自报的码率上限（bits/s），只读一次。只有「自动」档位用得上。
+    @Published private(set) var bitrateCeilings: [String: Int] = [:]
+    /// 已经问过上限的 serial。读不出来的那些也要记进来，否则每 3 秒的轮询会一直重问。
+    private var checkedBitrateCeilings: Set<String> = []
+
     private var pollTimer: Timer?
     private var flushTimer: Timer?
     private var pendingUpdate: ReleaseInfo?
@@ -391,8 +396,33 @@ final class AppModel: ObservableObject {
                 for device in found { self.lastKnownName[device.serial] = device.displayName }
                 // 设备增删之后，参数卡片的编辑对象可能得顺位（插上第一台、拔掉选中的那台）。
                 self.reconcileEditingSelection()
+                for device in found { self.readBitrateCeiling(for: device) }
             }
         }
+    }
+
+    /// 读一次这台设备编码器自报的码率上限，读到了就记住。
+    ///
+    /// 每台设备只读一次：它只随设备变，不随连接方式变，而每 3 秒一次的轮询里
+    /// 多跑一条 `adb shell` 是白花的。读不到（老机型没有那份 XML）就记成「问过了、
+    /// 没有」—— 否则每次轮询都会再问一遍，而这正是它读不出来的情况。
+    private func readBitrateCeiling(for device: AdbDevice) {
+        guard !checkedBitrateCeilings.contains(device.serial) else { return }
+        checkedBitrateCeilings.insert(device.serial)
+
+        let client = adbClient
+        let serial = device.serial
+        DispatchQueue.global(qos: .utility).async {
+            let ceiling = client.encoderBitrateCeiling(serial: serial)
+            guard let ceiling else { return }
+            DispatchQueue.main.async { self.bitrateCeilings[serial] = ceiling }
+        }
+    }
+
+    /// 这台设备的编码器码率上限（bits/s）。nil = 问不出来或还没问到。
+    func bitrateCeiling(for serial: String?) -> Int? {
+        guard let serial else { return nil }
+        return bitrateCeilings[serial]
     }
 
     func connectWireless(_ hostPort: String) {
@@ -634,7 +664,8 @@ final class AppModel: ObservableObject {
             device: device,
             recordingFileName: recordingFileName(for: device, settings: settings),
             windowTitle: windowTitle(for: device),
-            windowSlot: nextWindowSlot()
+            windowSlot: nextWindowSlot(),
+            bitrateCeiling: bitrateCeiling(for: serial)
         )
         let args = preferences.buildArguments(context)
 
