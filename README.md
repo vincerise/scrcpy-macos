@@ -23,13 +23,19 @@ ScrcpyMac 的定位是：原生 SwiftUI、体积小、不捆绑 scrcpy，引擎�
 
 ## 安装
 
+### 直接下载
+
+从 [Releases](https://github.com/vincerise/scrcpy-macos/releases) 下载最新的通用包，解压后把 `ScrcpyMac.app` 拖进「应用程序」。
+
+包是 ad-hoc 签名、未经过公证，首次打开如果被系统拦下，右键点 App 选「打开」即可。
+
 ### 从源码构建
 
 需要 Xcode（或 Command Line Tools）与 [XcodeGen](https://github.com/yonaskolb/XcodeGen)：
 
 ```bash
 brew install xcodegen
-git clone https://github.com/<your-name>/scrcpy-macos.git
+git clone https://github.com/vincerise/scrcpy-macos.git
 cd scrcpy-macos
 xcodegen generate
 scripts/build.sh

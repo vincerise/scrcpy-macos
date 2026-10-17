@@ -26,13 +26,21 @@ and follows the official engine releases.
 
 ## Install
 
+### Download
+
+Grab the latest universal build from [Releases](https://github.com/vincerise/scrcpy-macos/releases),
+unzip it, and drag `ScrcpyMac.app` into Applications.
+
+The build is ad-hoc signed and not notarised. If macOS blocks the first launch,
+right-click the app and choose **Open**.
+
 ### Build from source
 
 Requires Xcode (or Command Line Tools) and [XcodeGen](https://github.com/yonaskolb/XcodeGen):
 
 ```bash
 brew install xcodegen
-git clone https://github.com/<your-name>/scrcpy-macos.git
+git clone https://github.com/vincerise/scrcpy-macos.git
 cd scrcpy-macos
 xcodegen generate
 scripts/build.sh
