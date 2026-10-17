@@ -1,10 +1,13 @@
 # ScrcpyMac
 
 把 [scrcpy](https://github.com/Genymobile/scrcpy) 命令行工具包成一个原生的 macOS 应用：
-出现在启动台、可以固定到程序坞、双击就能投屏，并且**内置了跟随官方 Releases 的引擎更新**。
+出现在启动台、可以固定到程序坞、双击就能投屏，**自带两条更新通道**——App 本体跟随本仓库
+的 Releases，scrcpy 引擎跟随官方 Releases，各自检查、各自安装。
 
 > 非官方封装。scrcpy 由 [rom1v](https://github.com/rom1v) 开发，以 GPLv3 授权。
 > 本项目不重分发它的二进制，详见 [NOTICE.md](NOTICE.md)。
+
+![ScrcpyMac 主界面](docs/images/main-window.png)
 
 ## 功能
 
@@ -13,6 +16,7 @@
 - **行为**：音频转发、投屏时息屏、保持唤醒、窗口置顶、停止投屏后自动息屏
 - **录制**：投屏同时录成 mp4，文件名带时间戳
 - **高级**：任意 scrcpy 参数直接透传
+- **应用更新**：对比本仓库的最新 release，下载通用包并校验 SHA256 与签名后，在 App 自己的进程里原子替换并重启
 - **引擎更新**：对比 GitHub 上 `Genymobile/scrcpy` 的最新 release，校验 SHA256 后原地替换本地引擎
 
 不做按键映射（需要这个请用 QtScrcpy），也不修改 scrcpy 本身——全部能力都来自它的命令行参数。
@@ -27,7 +31,8 @@ ScrcpyMac 的定位是：原生 SwiftUI、体积小、不捆绑 scrcpy，引擎�
 
 从 [Releases](https://github.com/vincerise/scrcpy-macos/releases) 下载最新的通用包，解压后把 `ScrcpyMac.app` 拖进「应用程序」。
 
-包是 ad-hoc 签名、未经过公证，首次打开如果被系统拦下，右键点 App 选「打开」即可。
+包是 ad-hoc 签名、未经过公证，首次打开如果被系统拦下：macOS 14 及更早可以右键点 App
+选「打开」；macOS 15 起这个入口没有了，要去「系统设置 → 隐私与安全性」点「仍要打开」。
 
 ### 从源码构建
 
@@ -81,6 +86,8 @@ scrcpy 进程，各控各的设备；窗口默认按阶梯错开（「行为」�
 设备列表那一行就是参数选择器：点一下选中，下面几张卡片改的就是它，
 作用域条上写着这台是「跟随默认」还是「单独设置」。
 
+![按设备参数](docs/images/settings.png)
+
 行尾 `⋯` 菜单里还有三个动作，它们改的是别的设备，所以收在菜单里：
 
 | 动作 | 作用 |
@@ -112,10 +119,18 @@ scrcpy 进程，各控各的设备；窗口默认按阶梯错开（「行为」�
 下次直接点「投屏」即可（手机和电脑要在同一个 Wi-Fi 下）。
 无线设备也在同一个列表里，「断开连接」同样在 `⋯` 菜单里。
 
-**更新引擎**：引擎那一栏点「检查更新」，或者等它自己检查——每次启动都会在后台
-静默看一次，发现新版就把那一行变成「更新到 x.y.z」。**装不装由你点**：
-scrcpy 跳大版本时命令行参数也可能变。下载并校验通过后原地替换，下次投屏生效；
-更新期间不能投屏。
+**更新**：卡片上有两行，互不影响——「ScrcpyMac 应用」跟着本仓库的 release，
+「scrcpy 引擎」跟着 `Genymobile/scrcpy` 的 release。两行各自检查、各自下载；
+菜单里的「检查更新…」会同时触发两者。每次启动也会在后台静默看一次，只有发现新版才出声。
+
+![两条更新通道](docs/images/updates.png)
+
+App 更新下载并校验完成后，按钮变成「重启并更新到 x.y.z」。点下去 App 会**原地替换自己**
+然后退出，后台 helper 等它退出后重新打开新版本；30 秒内没确认启动就自动回滚。
+投屏中可以检查、下载，但「重启并更新」要求先停止投屏；引擎正在更新时也不能同时更新 App。
+
+引擎更新下载并校验通过后原地替换，下次投屏生效；更新期间不能投屏。
+scrcpy 跳大版本时命令行参数也可能变，所以**装不装由你点**。
 
 ## 它是怎么工作的
 
@@ -131,7 +146,7 @@ ScrcpyMac.app/Contents/Resources/engine-seed/        ← 只读种子，随 bund
 所以从源码构建、没跑过 `fetch-engine.sh` 的版本一启动就会下载一份到 Application Support；
 带种子的版本开箱即用，直到点过一次「检查更新」，之后生效的就是 Application Support 里那份新的。
 
-不把引擎放进 bundle 里，是为了让 **bundle 永远不被写入**：
+引擎放在 bundle 外面，而且引擎更新**从不写 bundle**：
 
 - ad-hoc 签名会 seal `Resources/`，替换里面的二进制会让 `cdhash` 变化，
   连锁导致所有 TCC 授权失效（本地网络权限反复弹窗，用户一旦点过「不允许」
@@ -140,7 +155,11 @@ ScrcpyMac.app/Contents/Resources/engine-seed/        ← 只读种子，随 bund
   此时写 bundle 必然失败
 - App 若由 root 拥有，写入需要提权
 
-引擎外置把这几个问题一次消掉，而且**不需要重新签名**。
+引擎外置把这几个问题一次消掉，而且引擎更新**不需要重新签名**。
+
+App 本体更新是唯一的例外：它按用户点击整体替换 bundle，签名随之改变，
+macOS 可能因此重新询问「本地网络」权限。这是 ad-hoc 签名没有稳定身份导致的，
+允许一次即可；详见常见问题。
 
 ### 签名
 
@@ -153,6 +172,37 @@ ad-hoc 签名（`codesign -s -`），没有 Developer ID。本地构建不带 qu
 
 ### 更新
 
+两条通道互不依赖。
+
+**App 本体**
+
+```
+GET /repos/vincerise/scrcpy-macos/releases/latest   （带 ETag，304 就跳过）
+  → ScrcpyMac-v<ver>-macos-universal.zip
+  → 校验 SHA256：优先用 API 的 asset digest，没有就用 SHA256SUMS.txt；
+    两者都有时必须一致，都没有就拒绝安装
+  → ditto 解压，要求恰好一个 .app
+  → codesign --verify --strict（不加 --deep）+ bundle id / 版本号 /
+    架构 / 最低系统版本
+  → 用户点「重启并更新」
+  → 当前进程内 renamex_np(RENAME_SWAP) 原子交换 bundle
+  → helper 等旧进程退出后重新打开；30 秒内没有确认就回滚
+```
+
+`codesign` 只能证明这个包完整、没有被改坏；ad-hoc 签名没有身份，任何人都能重新签一份。
+真正的信任锚是 HTTPS 下载的 release 资产和它的 SHA256。
+
+替换发生在 App 自己的进程里，而不是让 helper 去改 bundle：macOS 13 起 App Management
+对「另一个进程修改 App bundle」的限制更严，而 App 修改自己通常不需要额外授权。
+`renamex_np` 在非 APFS 卷上会失败，这时直接报错，不做两次 rename 的非原子回退——
+中途崩溃会留下一个打不开的启动路径。
+
+新版本启动后会写一个 ack 文件，helper 收到匹配的版本号才删掉旧包；没有 ack 的旧版本
+（这套机制之前发布的那些）只要进程稳定存活 5 秒也按成功处理。新版本起不来时会重试拉起，
+最后仍失败就把旧包换回去并重新打开。
+
+**引擎**
+
 ```
 GET /repos/Genymobile/scrcpy/releases/latest   （带 ETag，304 就跳过）
   → 按本机架构选 scrcpy-macos-{aarch64,x86_64}-v<ver>.tar.gz
@@ -161,7 +211,7 @@ GET /repos/Genymobile/scrcpy/releases/latest   （带 ETag，304 就跳过）
   → 同文件系统内两次 rename 原子切换
 ```
 
-更新**必须整体替换**：`scrcpy` 客户端与 `scrcpy-server` 的版本必须严格一致，
+引擎更新**必须整体替换**：`scrcpy` 客户端与 `scrcpy-server` 的版本必须严格一致，
 只换其中一个会被拒绝启动。
 
 ### 子进程不占程序坞
@@ -211,8 +261,26 @@ scrcpy 使用的 SDL3 Cocoa 后端会把进程设成 `NSApplicationActivationPol
 20 Mbps，1080p60 下已经是肉眼无损的量级。下拉框里的档位也是按这台设备的上限列的；
 真要越过它，用「额外参数」里的 `--video-bit-rate`。
 
-**能不能只更新 scrcpy 但不更新这个 App**
-可以，就是「检查更新」做的事。
+**能不能只更新其中一个**
+可以。两行各有「检查更新」，点哪行只查哪个；菜单里的「检查更新…」才会两个一起查。
+
+**更新 App 时按钮是灰的**
+行下方的提示会写明原因：正在投屏、引擎正在下载或安装、另一个同 bundle id 的实例在跑、
+位置只读或不可写、或者 App 是从压缩包里直接运行的（App Translocation）。把 App
+拖进「应用程序」再更新。如果是 App Management 拦截，去「系统设置 → 隐私与安全性 →
+App 管理」允许 ScrcpyMac。
+
+**更新 App 之后「本地网络」又弹了一次**
+ad-hoc 签名没有稳定身份，bundle 一换 `cdhash` 就变，macOS 会把新版本当成另一个 App。
+允许一次即可。每次更新都可能重弹，直到有 Developer ID 并公证。
+
+**更新失败会不会把 App 弄坏**
+不会无声地弄坏。替换前会完整校验，替换后读不到新版本号会立刻换回；helper 等不到
+新版本启动会把旧包换回去并重新打开。最坏情况是两个版本都没起来，可以从 Releases
+重新下载；设置和引擎都在 `~/Library/Application Support/ScrcpyMac/`，不受影响。
+
+**检查更新提示「额度用完」**
+GitHub 对匿名 API 限每小时 60 次，引擎和 App 共用这个额度。等一会儿再点。
 
 ## 开发
 
@@ -223,13 +291,16 @@ ScrcpyMac/
 ├── Engine/     引擎定位、引导、原子替换
 ├── Device/     adb 调用与输出解析
 ├── Session/    scrcpy 子进程的生命周期
-├── Update/     GitHub Releases 检查、下载、校验、解包
+├── Update/     App 与引擎的更新检查、下载、校验、安装
 ├── Model/      偏好设置持久化
 └── UI/         主界面与视图模型
 ```
 
 `project.yml` 是工程配置的唯一事实来源，`.xcodeproj` 不进仓库——改完 Swift 文件
 跑一次 `xcodegen generate` 即可。
+
+发布包：`scripts/release.sh` 从 `project.yml` 读版本号，构建不带引擎种子的通用包，
+检查签名与架构，生成 `SHA256SUMS.txt`，最后打印 `gh release create` 命令（不自动发布）。
 
 ## 授权
 

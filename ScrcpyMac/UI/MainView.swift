@@ -30,7 +30,7 @@ struct MainView: View {
             ThinScrollView {
                 VStack(alignment: .leading, spacing: Theme.Metric.cardSpacing) {
                     DeviceListCard(model: model, wirelessAddress: $wirelessAddress)
-                    engineCard
+                    updateCard
                     videoCard
                     behaviorCard
                     recordingCard
@@ -74,8 +74,9 @@ struct MainView: View {
     }
 
     private var versionLine: String {
-        guard let engine = model.engine else { return "引擎未就绪" }
-        return "scrcpy \(engine.version) · \(engine.origin == .managed ? "已安装" : "内置")"
+        let app = "v\(model.appVersion)"
+        guard let engine = model.engine else { return "\(app) · 引擎未就绪" }
+        return "\(app) · scrcpy \(engine.version) · \(engine.origin == .managed ? "已安装" : "内置")"
     }
 
     // MARK: - 参数作用域
@@ -178,28 +179,130 @@ struct MainView: View {
         return items
     }
 
-    // MARK: - 引擎
+    // MARK: - 更新
 
-    private var engineCard: some View {
+    private var updateCard: some View {
         SettingsCard {
+            SettingsRow("ScrcpyMac 应用", hint: appHint) {
+                appAccessory
+            }
+            SettingsRowDivider()
             SettingsRow("scrcpy 引擎", hint: engineHint) {
                 engineAccessory
             }
         }
     }
 
+    private var appHint: String {
+        let current = "当前 v\(model.appVersion)"
+        switch model.appUpdateState {
+        case .available(let version):
+            return "\(current) · 新版本 \(version)"
+        case .downloading:
+            return "\(current) · 正在下载"
+        case .preparing:
+            return "\(current) · 正在校验"
+        case .ready(let version):
+            if let blocker = model.appInstallBlocker {
+                return "\(current) · \(blocker)"
+            }
+            return "\(current) · 已下载 \(version)，重启后完成替换"
+        case .installing:
+            return "\(current) · 正在替换并退出"
+        case .failed(let message):
+            return message
+        case .updated(let version):
+            return "已更新到 v\(version)"
+        default:
+            return "\(current) · 更新后 App 会退出并重新打开"
+        }
+    }
+
+    @ViewBuilder
+    private var appAccessory: some View {
+        switch model.appUpdateState {
+        case .idle:
+            ActionButton(title: "检查更新", systemImage: "arrow.triangle.2.circlepath", style: .tinted) {
+                model.checkAppUpdate()
+            }
+
+        case .checking:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("检查中…").font(.system(size: Theme.FontSize.small)).foregroundStyle(.secondary)
+            }
+
+        case .upToDate:
+            HStack(spacing: 8) {
+                Text("已是最新").font(.system(size: Theme.FontSize.small)).foregroundStyle(.secondary)
+                ActionButton(title: "重查", style: .quiet, height: 26) { model.checkAppUpdate() }
+            }
+
+        case .available(let version):
+            ActionButton(title: "更新到 \(version)", systemImage: "arrow.down.circle", style: .primary) {
+                model.downloadAppUpdate()
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress).frame(width: 90)
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: Theme.FontSize.small))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+        case .preparing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("校验中…").font(.system(size: Theme.FontSize.small)).foregroundStyle(.secondary)
+            }
+
+        case .ready(let version):
+            HStack(spacing: 8) {
+                ActionButton(title: "重启并更新到 \(version)", systemImage: "arrow.clockwise", style: .primary) {
+                    model.installAppUpdate()
+                }
+                .disabled(model.appInstallBlocker != nil)
+                ActionButton(title: "取消", style: .quiet, height: 26) { model.discardAppUpdate() }
+            }
+
+        case .installing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("正在退出…").font(.system(size: Theme.FontSize.small)).foregroundStyle(.secondary)
+            }
+
+        case .updated(let version):
+            HStack(spacing: 8) {
+                Text("已更新到 \(version)")
+                    .font(.system(size: Theme.FontSize.small))
+                    .foregroundStyle(Theme.Palette.success)
+                ActionButton(title: "好", style: .quiet, height: 26) { model.dismissAppUpdateState() }
+            }
+
+        case .failed:
+            if model.hasStagedAppUpdate {
+                ActionButton(title: "重试安装", style: .tinted, height: 26) { model.installAppUpdate() }
+                    .disabled(model.appInstallBlocker != nil)
+            } else {
+                ActionButton(title: "重试", style: .tinted, height: 26) { model.checkAppUpdate() }
+            }
+        }
+    }
+
     private var engineHint: String {
         if let engine = model.engine {
-            return model.isRunning
+            return model.anySessionActive
                 ? "投屏进行中，停掉之后才能更新"
-                : "v\(engine.version) · 官方 macOS \(UpdateChecker.assetArchSuffix) 版"
+                : "v\(engine.version) · 官方 macOS \(EngineUpdateChecker.assetArchSuffix) 版"
         }
         return model.engineMessage ?? "正在准备…"
     }
 
     @ViewBuilder
     private var engineAccessory: some View {
-        switch model.updateState {
+        switch model.engineUpdateState {
         case .idle:
             ActionButton(title: "检查更新", systemImage: "arrow.triangle.2.circlepath", style: .tinted) {
                 model.checkForUpdates()
@@ -237,7 +340,7 @@ struct MainView: View {
                 Text("已更新到 \(version)")
                     .font(.system(size: Theme.FontSize.small))
                     .foregroundStyle(Theme.Palette.success)
-                ActionButton(title: "好", style: .quiet, height: 26) { model.dismissUpdateState() }
+                ActionButton(title: "好", style: .quiet, height: 26) { model.dismissEngineUpdateState() }
             }
 
         case .engineReady(let version):
@@ -245,7 +348,7 @@ struct MainView: View {
                 Text("引擎已就绪 · scrcpy \(version)")
                     .font(.system(size: Theme.FontSize.small))
                     .foregroundStyle(Theme.Palette.success)
-                ActionButton(title: "好", style: .quiet, height: 26) { model.dismissUpdateState() }
+                ActionButton(title: "好", style: .quiet, height: 26) { model.dismissEngineUpdateState() }
             }
 
         case .failed(let message):
@@ -496,8 +599,8 @@ struct MainView: View {
         }
         if model.isPreparingEngine { return "正在准备引擎…" }
         if model.engine == nil { return "还没有 scrcpy 引擎，先在上面点「检查更新」下载一份。" }
-        if case .downloading = model.updateState { return "正在下载引擎更新…" }
-        if case .checking = model.updateState { return "正在检查更新…" }
+        if case .downloading = model.engineUpdateState { return "正在下载引擎更新…" }
+        if case .checking = model.engineUpdateState { return "正在检查更新…" }
         if model.startableSerials.isEmpty {
             return model.rows.isEmpty
                 ? "没有可用的设备。用 USB 连上手机并打开「USB 调试」。"

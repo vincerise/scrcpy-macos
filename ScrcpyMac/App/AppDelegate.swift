@@ -126,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func checkForUpdates(_ sender: Any?) {
         mainWindowController?.showWindow(nil)
-        model?.checkForUpdates()
+        // 菜单入口同时查 App 本体和引擎；两行各自报告结果。
+        model?.checkAllUpdates()
     }
 }

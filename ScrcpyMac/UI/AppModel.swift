@@ -186,7 +186,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - 更新
 
-    enum UpdateState: Equatable {
+    enum EngineUpdateState: Equatable {
         case idle
         case checking
         case upToDate(String)
@@ -200,7 +200,29 @@ final class AppModel: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var updateState: UpdateState = .idle
+    @Published private(set) var engineUpdateState: EngineUpdateState = .idle
+
+    /// App 本体更新。和引擎更新分开：它最终要退出并替换整个 `.app`，
+    /// 状态机也因此多出「已下载待重启」这一步。
+    enum AppUpdateState: Equatable {
+        case idle
+        case checking
+        case upToDate(String)
+        case available(String)
+        case downloading(Double)
+        /// 下载完成，正在校验/解压。
+        case preparing
+        /// 已下载并验证，等用户点重启。
+        case ready(String)
+        case installing
+        /// 本次启动就是刚更新后的版本。
+        case updated(String)
+        case failed(String)
+    }
+
+    @Published private(set) var appUpdateState: AppUpdateState = .idle
+
+    var appVersion: String { AppInfo.version }
 
     // MARK: - 参数（按设备）
 
@@ -232,7 +254,8 @@ final class AppModel: ObservableObject {
 
     private let preferences = Preferences.shared
     private let engineStore = EngineStore.shared
-    private let updater = UpdateChecker()
+    private let engineUpdater = EngineUpdateChecker()
+    private let appUpdater = AppUpdateChecker()
 
     /// 每台设备一路会话，key 是 serial。
     ///
@@ -249,7 +272,9 @@ final class AppModel: ObservableObject {
 
     private var pollTimer: Timer?
     private var flushTimer: Timer?
-    private var pendingUpdate: ReleaseInfo?
+    private var pendingEngineUpdate: EngineReleaseInfo?
+    private var pendingAppRelease: AppReleaseInfo?
+    private var stagedAppURL: URL?
 
     /// 退出流程的计数与完成回调，见 `stopForTermination`。
     private var terminationRemaining = 0
@@ -284,17 +309,34 @@ final class AppModel: ObservableObject {
         adbPathOverride = preferences.adbPathOverride ?? ""
     }
 
-    /// 启动后调用一次：清理孤儿进程、准备引擎、开日志刷新。
+    /// 启动后调用一次：收尾上次更新、清理孤儿进程、准备引擎、开日志刷新。
     func start() {
         startFlushTimer()
+
+        // 必须在静默检查之前：新版本启动时要给 helper 发成功信号；
+        // 回滚后的旧版本要读出失败原因，而不是被一次「已是最新」覆盖掉。
+        if let result = AppInstaller.acknowledgeLaunchIfNeeded() {
+            switch result {
+            case .updated(let version):
+                appUpdateState = .updated(version)
+                appendLog("[应用更新] 已更新到 \(version)。\n")
+            case .failed(let message):
+                appUpdateState = .failed(message)
+                appendLog("[应用更新] 上次更新失败：\(message)\n")
+            }
+        }
+        appUpdater.cleanupStaleStaging()
+
         prepareEngine()
+        checkAppUpdate(silent: true)
     }
 
     func shutdown() {
         pollTimer?.invalidate()
         flushTimer?.invalidate()
         terminationTimer?.invalidate()
-        updater.cancel()
+        engineUpdater.cancel()
+        appUpdater.cancel()
     }
 
     // MARK: - 引擎
@@ -347,12 +389,12 @@ final class AppModel: ObservableObject {
         engineMessage = "首次运行，正在获取 scrcpy 引擎…"
         appendLog("[引擎] 本机没有引擎，自动从官方 Releases 获取一份。\n")
 
-        updater.check(current: "0") { [weak self] result in
+        engineUpdater.check(current: "0") { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(.available(let info)):
-                    self.pendingUpdate = info
+                    self.pendingEngineUpdate = info
                     self.install(info, isFirstRun: true)
                 case .success(.upToDate), .success(.notModified):
                     // 当前版本传的是 "0"，不该被判成最新。真发生了说明版本比较坏了。
@@ -710,7 +752,7 @@ final class AppModel: ObservableObject {
     }
 
     private var updateBlocker: String? {
-        switch updateState {
+        switch engineUpdateState {
         case .downloading: "正在下载引擎更新，稍后再试。"
         case .checking: "正在检查更新，稍后再试。"
         default: nil
@@ -885,30 +927,30 @@ final class AppModel: ObservableObject {
         // 判据是 anySessionActive 而不是 isRunning：「停止中」的那几秒里进程还活着，
         // 而替换引擎目录是整目录改名，不能和任何一个还没退干净的会话重叠。
         guard !anySessionActive else {
-            if !silent { updateState = .failed("请先停止投屏再检查更新。") }
+            if !silent { engineUpdateState = .failed("请先停止投屏再检查更新。") }
             return
         }
         let current = engine?.version ?? "0"
         if !silent {
-            updateState = .checking
+            engineUpdateState = .checking
             appendLog("[更新] 正在检查（当前 \(current)）…\n")
         }
 
-        updater.check(current: current) { [weak self] result in
+        engineUpdater.check(current: current) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(.upToDate(let version)), .success(.notModified(let version)):
                     guard !silent else { return }
-                    self.updateState = .upToDate(version)
+                    self.engineUpdateState = .upToDate(version)
                     self.appendLog("[更新] 已是最新版 \(version)。\n")
                 case .success(.available(let info)):
-                    self.pendingUpdate = info
-                    self.updateState = .available(info.version)
+                    self.pendingEngineUpdate = info
+                    self.engineUpdateState = .available(info.version)
                     self.appendLog("[更新] 发现新版本 scrcpy \(info.version)。\n")
                 case .failure(let error):
                     guard !silent else { return }
-                    self.updateState = .failed(error.localizedDescription)
+                    self.engineUpdateState = .failed(error.localizedDescription)
                     self.appendLog("[更新] 检查失败：\(error.localizedDescription)\n")
                 }
             }
@@ -916,9 +958,9 @@ final class AppModel: ObservableObject {
     }
 
     func downloadPendingUpdate() {
-        guard let info = pendingUpdate else { return }
+        guard let info = pendingEngineUpdate else { return }
         guard !anySessionActive else {
-            updateState = .failed("请先停止投屏再更新。")
+            engineUpdateState = .failed("请先停止投屏再更新。")
             return
         }
         install(info, isFirstRun: false)
@@ -926,26 +968,26 @@ final class AppModel: ObservableObject {
 
     /// 下载并安装。首次自动装与用户手动点「更新到 x.y.z」走的是同一条路，
     /// 只有收尾时给出的反馈不同。
-    private func install(_ info: ReleaseInfo, isFirstRun: Bool) {
+    private func install(_ info: EngineReleaseInfo, isFirstRun: Bool) {
         // 入口守卫之外再自检一次：真正动引擎目录的是下面那个下载完成回调，
         // 而首次自动安装那条路径根本没有入口守卫。多设备之后「现在有几路在跑」
         // 是个随时会变的值，只靠调用方在几秒前问过一次是不够的。
         guard !anySessionActive else {
-            updateState = .failed("请先停止投屏再更新。")
+            engineUpdateState = .failed("请先停止投屏再更新。")
             return
         }
-        updateState = .downloading(0)
+        engineUpdateState = .downloading(0)
         appendLog("[更新] 开始下载 scrcpy \(info.version)（\(info.assetName)）…\n")
 
-        updater.download(info, progress: { [weak self] value in
-            DispatchQueue.main.async { self?.updateState = .downloading(value) }
+        engineUpdater.download(info, progress: { [weak self] value in
+            DispatchQueue.main.async { self?.engineUpdateState = .downloading(value) }
         }, completion: { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(let staging):
                     guard !self.anySessionActive else {
-                        self.updateState = .failed("投屏已经开始了，先停止再更新。")
+                        self.engineUpdateState = .failed("投屏已经开始了，先停止再更新。")
                         return
                     }
                     // 安装本身要挪到后台：里面有一次最长 15 秒的同步冒烟测试，
@@ -954,7 +996,7 @@ final class AppModel: ObservableObject {
                     self.installInBackground(staging, isFirstRun: isFirstRun)
                 case .failure(let error):
                     self.failEngineSetup(error.localizedDescription)
-                    self.updateState = .failed(error.localizedDescription)
+                    self.engineUpdateState = .failed(error.localizedDescription)
                     self.appendLog("[更新] 下载失败：\(error.localizedDescription)\n")
                 }
             }
@@ -972,20 +1014,153 @@ final class AppModel: ObservableObject {
                 let installed = try store.install(from: staging)
                 DispatchQueue.main.async {
                     self.acceptEngine(installed, note: "[更新] 引擎已就绪：scrcpy \(installed.version)。\n")
-                    self.updateState = isFirstRun ? .engineReady(installed.version) : .installed(installed.version)
+                    self.engineUpdateState = isFirstRun ? .engineReady(installed.version) : .installed(installed.version)
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.failEngineSetup(error.localizedDescription)
-                    self.updateState = .failed(error.localizedDescription)
+                    self.engineUpdateState = .failed(error.localizedDescription)
                     self.appendLog("[更新] 安装失败：\(error.localizedDescription)\n")
                 }
             }
         }
     }
 
-    func dismissUpdateState() {
-        updateState = .idle
-        pendingUpdate = nil
+    func dismissEngineUpdateState() {
+        engineUpdateState = .idle
+        pendingEngineUpdate = nil
+    }
+
+    // MARK: - App 本体更新
+
+    /// 菜单里的「检查更新…」：两个都查，各自独立报告。
+    func checkAllUpdates() {
+        checkAppUpdate()
+        checkForUpdates()
+    }
+
+    /// 检查 App 本体。投屏期间也允许——这一步不碰任何正在运行的进程。
+    func checkAppUpdate(silent: Bool = false) {
+        switch appUpdateState {
+        case .checking, .downloading, .preparing, .ready, .installing:
+            return
+        default:
+            break
+        }
+
+        if !silent {
+            appUpdateState = .checking
+            appendLog("[应用更新] 正在检查（当前 \(AppInfo.version)）…\n")
+        }
+
+        appUpdater.check(current: AppInfo.version) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(.upToDate(let version)), .success(.notModified(let version)):
+                    guard !silent else { return }
+                    self.appUpdateState = .upToDate(version)
+                    self.appendLog("[应用更新] 已是最新版 \(version)。\n")
+                case .success(.available(let info)):
+                    self.pendingAppRelease = info
+                    self.appUpdateState = .available(info.version)
+                    self.appendLog("[应用更新] 发现新版本 \(info.version)。\n")
+                case .failure(let error):
+                    guard !silent else { return }
+                    self.appUpdateState = .failed(error.localizedDescription)
+                    self.appendLog("[应用更新] 检查失败：\(error.localizedDescription)\n")
+                }
+            }
+        }
+    }
+
+    /// 下载并校验。投屏期间也能做，真正会打断投屏的是后面的重启。
+    func downloadAppUpdate() {
+        guard let info = pendingAppRelease else { return }
+        switch appUpdateState {
+        case .downloading, .preparing, .ready, .installing:
+            return
+        default:
+            break
+        }
+
+        appUpdateState = .downloading(0)
+        appendLog("[应用更新] 开始下载 \(info.version)（\(info.assetName)）…\n")
+
+        appUpdater.download(info, progress: { [weak self] value in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.appUpdateState = value >= 1.0 ? .preparing : .downloading(value)
+            }
+        }, completion: { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let app):
+                    self.stagedAppURL = app
+                    self.appUpdateState = .ready(info.version)
+                    self.appendLog("[应用更新] \(info.version) 已下载并通过校验。\n")
+                case .failure(let error):
+                    self.appUpdateState = .failed(error.localizedDescription)
+                    self.appendLog("[应用更新] 下载失败：\(error.localizedDescription)\n")
+                }
+            }
+        })
+    }
+
+    /// 重启更新之前的所有阻碍。nil = 可以开始。
+    var appInstallBlocker: String? {
+        if anySessionActive { return "先停止投屏，再重启更新。" }
+        if isPreparingEngine { return "引擎还在准备中，稍后再更新 App。" }
+        if case .downloading = engineUpdateState { return "引擎正在更新，稍后再更新 App。" }
+        return AppInstaller.installBlocker()
+    }
+
+    /// 是否还有一份下载好、等着安装的 App（失败后可以直接重试安装）。
+    var hasStagedAppUpdate: Bool { stagedAppURL != nil }
+
+    func installAppUpdate() {
+        // 不要求当前状态一定是 `.ready`：安装失败后 stagedAppURL 还在，
+        // 用户点「重试安装」应当复用同一份包，而不是重新下载。
+        guard let staged = stagedAppURL, let version = pendingAppRelease?.version else { return }
+        if case .installing = appUpdateState { return }
+        if let blocker = appInstallBlocker {
+            appUpdateState = .failed(blocker)
+            appendLog("[应用更新] \(blocker)\n")
+            return
+        }
+
+        appUpdateState = .installing
+        appendLog("[应用更新] 正在替换 App 并准备重启…\n")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try AppInstaller.install(stagedApp: staged, expectedVersion: version)
+                DispatchQueue.main.async {
+                    self.stagedAppURL = nil
+                    // helper 已经在等本进程退出；留一小段时间让界面把
+                    // 「正在退出」刷出来，也确保 Process 已经完成 spawn。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        NSApp.terminate(nil)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.appUpdateState = .failed(error.localizedDescription)
+                    self.appendLog("[应用更新] 安装失败：\(error.localizedDescription)\n")
+                }
+            }
+        }
+    }
+
+    func discardAppUpdate() {
+        if let staged = stagedAppURL { appUpdater.discard(staged) }
+        stagedAppURL = nil
+        pendingAppRelease = nil
+        appUpdateState = .idle
+    }
+
+    func dismissAppUpdateState() {
+        appUpdateState = .idle
     }
 }

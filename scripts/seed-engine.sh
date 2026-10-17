@@ -9,6 +9,14 @@
 # 所以这里加进去的文件会被正常 seal 进签名。
 set -euo pipefail
 
+# 发布构建：把 scrcpy 的二进制打进安装包属于重分发，会触发 GPLv3 的传染性。
+# 这里不仅跳过拷贝，还要清掉增量构建可能留下的旧种子。
+if [[ "${SKIP_ENGINE_SEED:-0}" == "1" ]]; then
+  rm -rf "${1:?用法: seed-engine.sh <App 路径>}/Contents/Resources/engine-seed"
+  echo "note: SKIP_ENGINE_SEED=1，跳过引擎种子"
+  exit 0
+fi
+
 APP="${1:?用法: seed-engine.sh <App 路径>}"
 ROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 ENGINE="$ROOT/engine"

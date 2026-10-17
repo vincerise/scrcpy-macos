@@ -11,8 +11,8 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
     # ad-hoc 签名。没有 Developer ID，也永远无法公证 —— 本地构建不带 quarantine，
     # 所以不会弹「未识别开发者」。见 README「签名」一节。
     CODE_SIGN_IDENTITY: "-"
@@ -46,6 +46,10 @@ targets:
     platform: macOS
     sources:
       - path: ScrcpyMac
+      # 自更新助手脚本。App 在换 bundle 之前把它从 bundle 复制到
+      # Application Support，再交给 /bin/bash 执行。
+      - path: scripts/app-update-helper.sh
+        buildPhase: resources
     entitlements:
       path: ScrcpyMac/ScrcpyMac.entitlements
       properties:
