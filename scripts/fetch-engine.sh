@@ -67,7 +67,7 @@ else
   EXPECT="$(awk -v a="$ASSET" '$2 == a { print $1 }' "$TMP/SHA256SUMS.txt")"
   [[ -n "$EXPECT" ]] || { echo "SHA256SUMS.txt 里找不到 $ASSET" >&2; exit 1; }
   ACTUAL="$(shasum -a 256 "$TMP/$ASSET" | awk '{ print $1 }')"
-  [[ "$EXPECT" == "$ACTUAL" ]] || { echo "SHA256 不匹配！期望 $EXPECT，实际 $ACTUAL" >&2; exit 1; }
+  [[ "$EXPECT" == "$ACTUAL" ]] || { echo "SHA256 不匹配！期望 ${EXPECT}，实际 ${ACTUAL}" >&2; exit 1; }
 
   echo "==> 解压"
   mkdir -p "$TMP/x"

@@ -14,7 +14,7 @@ ROOT="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 ENGINE="$ROOT/engine"
 
 if [[ ! -d "$ENGINE" ]]; then
-  echo "note: 未找到 $ENGINE，跳过引擎种子（App 首次启动时将联网下载）"
+  echo "note: 未找到 ${ENGINE}，跳过引擎种子（App 首次启动时将联网下载）"
   exit 0
 fi
 

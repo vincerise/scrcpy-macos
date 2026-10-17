@@ -9,7 +9,7 @@ SRC="$ROOT/build/Build/Products/$CONFIG/ScrcpyMac.app"
 DEST_DIR="${DEST_DIR:-/Applications}"
 DEST="$DEST_DIR/ScrcpyMac.app"
 
-[[ -d "$SRC" ]] || { echo "没找到 $SRC，先跑 scripts/build.sh" >&2; exit 1; }
+[[ -d "$SRC" ]] || { echo "没找到 ${SRC}，先跑 scripts/build.sh" >&2; exit 1; }
 
 # 正在跑就先退掉：替换一个正在运行的 bundle，行为未定义。
 if pgrep -f "$DEST/Contents/MacOS/ScrcpyMac" >/dev/null 2>&1; then
